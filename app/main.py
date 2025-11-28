@@ -104,6 +104,130 @@ async def extract_page_text(request: PageTextRequest):
         print(f"Error extracting text: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to extract text: {str(e)}")
 
+class QuestionTranslationRequest(BaseModel):
+    question_number: str
+    pdf_filename: str = "az-204.pdf"
+    start_page_hint: int = 1
+    manual_start_page: Optional[int] = None
+    manual_end_page: Optional[int] = None
+
+@app.post("/translate-question")
+async def translate_question(request: QuestionTranslationRequest):
+    if not client:
+        raise HTTPException(status_code=503, detail="Azure OpenAI service not configured")
+
+    pdf_path = DATA_DIR / request.pdf_filename
+    if not pdf_path.exists():
+        raise HTTPException(status_code=404, detail=f"PDF file not found: {request.pdf_filename}")
+
+    try:
+        start_page_idx = -1
+        end_page_idx = -1
+        
+        # Lógica de selección de páginas
+        if request.manual_start_page is not None and request.manual_end_page is not None:
+            # Usar rango manual proporcionado por el usuario
+            start_page_idx = request.manual_start_page - 1
+            end_page_idx = request.manual_end_page - 1
+            
+            # Validaciones básicas
+            with pdfplumber.open(pdf_path) as pdf:
+                total_pages = len(pdf.pages)
+                if start_page_idx < 0 or end_page_idx >= total_pages or start_page_idx > end_page_idx:
+                     raise HTTPException(status_code=400, detail=f"Invalid page range. PDF has {total_pages} pages.")
+        else:
+            # 1. Buscar la pregunta en el PDF (Lógica automática existente)
+            with pdfplumber.open(pdf_path) as pdf:
+                q_pattern = f"Question #{request.question_number}"
+                next_q_pattern = f"Question #{int(request.question_number) + 1}"
+                
+                # Buscar página de inicio
+                # Empezamos buscando desde la pista (hint) para eficiencia, si no, desde el principio
+                search_order = list(range(max(0, request.start_page_hint - 1), len(pdf.pages)))
+                if request.start_page_hint > 1:
+                    search_order = search_order + list(range(0, request.start_page_hint - 1))
+                
+                for i in search_order:
+                    text = pdf.pages[i].extract_text() or ""
+                    if q_pattern in text:
+                        start_page_idx = i
+                        break
+                
+                if start_page_idx == -1:
+                    raise HTTPException(status_code=404, detail=f"Question #{request.question_number} not found in PDF. Try specifying the page range manually.")
+
+                # Buscar página final (donde empieza la siguiente pregunta o un límite razonable)
+                end_page_idx = start_page_idx
+                # Buscamos hasta 3 páginas adelante máximo
+                for i in range(start_page_idx, min(start_page_idx + 4, len(pdf.pages))):
+                    text = pdf.pages[i].extract_text() or ""
+                    if i > start_page_idx and next_q_pattern in text:
+                        # Si encontramos la siguiente pregunta, la página anterior es el fin seguro, 
+                        # o esta página si la pregunta nueva empieza muy abajo. 
+                        # Por seguridad, incluimos esta página para contexto.
+                        end_page_idx = i
+                        break
+                    end_page_idx = i
+
+        # 2. Convertir páginas a imágenes
+        # Prompt refinado para cumplir con los 4 puntos solicitados y manejo de imágenes
+        prompt_text = (
+            f"Translate 'Question #{request.question_number}' to Spanish based on the provided images. "
+            f"The content is from pages {start_page_idx + 1} to {end_page_idx + 1}. "
+            "Output strictly in Markdown format with the following 4 sections:\n\n"
+            f"1. **Pregunta {request.question_number} (Páginas {start_page_idx + 1}-{end_page_idx + 1})**\n"
+            "2. **Contexto**: The full body of the question. If there are diagrams, architecture schemas, or screenshots in the question area, interpret them and describe them in detail in Spanish here.\n"
+            "3. **Opciones**: List the multiple choice options. If the options are images (e.g., different graphs or icons), describe what each image option represents in Spanish.\n"
+            "4. **Respuesta Correcta**: Provide the correct answer and the explanation. If the answer refers to an image or diagram, explain why that specific image is correct based on the visual evidence.\n\n"
+            "Ignore any content belonging to the next question (e.g., 'Question #" + str(int(request.question_number) + 1) + "')."
+        )
+
+        content_payload = [
+            {
+                "type": "text", 
+                "text": prompt_text
+            }
+        ]
+
+        with pdfplumber.open(pdf_path) as pdf:
+            for i in range(start_page_idx, end_page_idx + 1):
+                page = pdf.pages[i]
+                # Aumentamos un poco la resolución para mejor OCR de diagramas
+                im = page.to_image(resolution=200)
+                img_byte_arr = io.BytesIO()
+                im.original.save(img_byte_arr, format='PNG')
+                b64_img = base64.b64encode(img_byte_arr.getvalue()).decode('utf-8')
+                
+                content_payload.append({
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/png;base64,{b64_img}"
+                    }
+                })
+
+        # 3. Enviar a Azure OpenAI
+        response = client.chat.completions.create(
+            model=deployment_name,
+            messages=[
+                {
+                    "role": "system", 
+                    "content": "You are an expert technical instructor for Azure certification exams. You are capable of analyzing complex network diagrams, code snippets, and UI screenshots within exam questions and explaining them clearly in Spanish."
+                },
+                {
+                    "role": "user",
+                    "content": content_payload
+                }
+            ],
+            max_completion_tokens=3000
+        )
+        
+        translation = response.choices[0].message.content
+        return {"translation": translation, "pages_processed": f"{start_page_idx+1}-{end_page_idx+1}"}
+
+    except Exception as e:
+        print(f"Translation error: {e}")
+        raise HTTPException(status_code=500, detail=f"Translation failed: {str(e)}")
+
 @app.post("/translate-page-image")
 async def translate_page_image(request: PageTextRequest):
     if not client:

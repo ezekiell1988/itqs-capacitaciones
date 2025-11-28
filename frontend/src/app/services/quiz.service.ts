@@ -58,4 +58,14 @@ export class QuizService {
   translatePageImage(pageNumber: number, pdfFilename: string = 'az-204.pdf'): Observable<{ translation: string }> {
     return this.http.post<{ translation: string }>(`${this.apiUrl}/translate-page-image`, { page_number: pageNumber, pdf_filename: pdfFilename });
   }
+
+  translateQuestion(questionNumber: string, startPageHint: number, pdfFilename: string = 'az-204.pdf', manualStartPage?: number, manualEndPage?: number): Observable<{ translation: string, pages_processed: string }> {
+    return this.http.post<{ translation: string, pages_processed: string }>(`${this.apiUrl}/translate-question`, {
+      question_number: questionNumber,
+      start_page_hint: startPageHint,
+      pdf_filename: pdfFilename,
+      manual_start_page: manualStartPage,
+      manual_end_page: manualEndPage
+    });
+  }
 }

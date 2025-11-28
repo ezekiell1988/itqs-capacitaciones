@@ -29,6 +29,7 @@
     "@ionic/angular": "^8.0.0",
     "ionicons": "^7.0.0",
     "ngx-extended-pdf-viewer": "^25.6.1",
+    "ngx-markdown": "^21.0.0",
     "rxjs": "~7.8.0",
     "tslib": "^2.3.0",
     "zone.js": "~0.15.0"
