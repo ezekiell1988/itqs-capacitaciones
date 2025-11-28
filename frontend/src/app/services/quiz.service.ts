@@ -54,4 +54,8 @@ export class QuizService {
   extractPageText(pageNumber: number, pdfFilename: string = 'az-204.pdf'): Observable<{ text: string }> {
     return this.http.post<{ text: string }>(`${this.apiUrl}/extract-page-text`, { page_number: pageNumber, pdf_filename: pdfFilename });
   }
+
+  translatePageImage(pageNumber: number, pdfFilename: string = 'az-204.pdf'): Observable<{ translation: string }> {
+    return this.http.post<{ translation: string }>(`${this.apiUrl}/translate-page-image`, { page_number: pageNumber, pdf_filename: pdfFilename });
+  }
 }

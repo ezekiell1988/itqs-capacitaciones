@@ -11,6 +11,9 @@ from fastapi.responses import FileResponse
 from dotenv import load_dotenv
 from openai import AzureOpenAI
 import mimetypes
+import pdfplumber
+import base64
+import io
 
 # Ensure .mjs files are served with the correct MIME type
 mimetypes.add_type('application/javascript', '.mjs')
@@ -49,6 +52,13 @@ app.add_middleware(
 
 DATA_DIR = Path(__file__).parent / "data"
 
+@app.get("/pdfs/{filename}")
+async def get_pdf(filename: str):
+    file_path = DATA_DIR / filename
+    if file_path.exists() and file_path.is_file():
+        return FileResponse(file_path, media_type='application/pdf')
+    raise HTTPException(status_code=404, detail="PDF not found")
+
 class Option(BaseModel):
     letra: str
     texto: str
@@ -72,8 +82,8 @@ class PageTextRequest(BaseModel):
 
 @app.post("/extract-page-text")
 async def extract_page_text(request: PageTextRequest):
-    # Ruta al PDF en assets del frontend
-    pdf_path = Path(__file__).parent.parent / "frontend" / "src" / "assets" / "pdf" / request.pdf_filename
+    # Ruta al PDF en app/data
+    pdf_path = DATA_DIR / request.pdf_filename
     
     if not pdf_path.exists():
         raise HTTPException(status_code=404, detail=f"PDF file not found: {request.pdf_filename}")
@@ -93,6 +103,61 @@ async def extract_page_text(request: PageTextRequest):
     except Exception as e:
         print(f"Error extracting text: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to extract text: {str(e)}")
+
+@app.post("/translate-page-image")
+async def translate_page_image(request: PageTextRequest):
+    if not client:
+        raise HTTPException(status_code=503, detail="Azure OpenAI service not configured")
+
+    # Ruta al PDF en app/data
+    pdf_path = DATA_DIR / request.pdf_filename
+    
+    if not pdf_path.exists():
+        raise HTTPException(status_code=404, detail=f"PDF file not found: {request.pdf_filename}")
+    
+    try:
+        base64_image = ""
+        with pdfplumber.open(pdf_path) as pdf:
+            page_idx = request.page_number - 1
+            if 0 <= page_idx < len(pdf.pages):
+                page = pdf.pages[page_idx]
+                # Renderizar página a imagen (resolución 150 DPI es un buen balance)
+                im = page.to_image(resolution=150)
+                img_byte_arr = io.BytesIO()
+                im.original.save(img_byte_arr, format='PNG')
+                img_byte_arr = img_byte_arr.getvalue()
+                base64_image = base64.b64encode(img_byte_arr).decode('utf-8')
+            else:
+                raise HTTPException(status_code=400, detail="Page number out of range")
+
+        response = client.chat.completions.create(
+            model=deployment_name,
+            messages=[
+                {
+                    "role": "system", 
+                    "content": "You are a helpful assistant that translates technical documentation from English to Spanish. The user provides an image of a PDF page. Translate the content (text, diagrams, code comments) to Spanish. Use markdown for formatting. If there is code, keep it as is but translate comments if possible."
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Translate this page to Spanish."},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/png;base64,{base64_image}"
+                            }
+                        }
+                    ]
+                }
+            ],
+            max_completion_tokens=2000
+        )
+        translation = response.choices[0].message.content
+        return {"translation": translation}
+
+    except Exception as e:
+        print(f"Translation error: {e}")
+        raise HTTPException(status_code=500, detail=f"Translation failed: {str(e)}")
 
 @app.post("/translate")
 async def translate_text(request: TranslateRequest):

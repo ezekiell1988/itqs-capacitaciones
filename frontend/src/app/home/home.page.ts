@@ -14,7 +14,7 @@ import { QuizService } from '../services/quiz.service';
 
     <ion-content [fullscreen]="true">
       <ngx-extended-pdf-viewer
-        src="assets/pdf/az-204.pdf"
+        [src]="pdfSrc"
         [height]="'100%'"
         [textLayer]="true"
         [showHandToolButton]="true"
@@ -90,6 +90,7 @@ export class HomePage {
   showTranslation = false;
   translating = false;
   translatedText = '';
+  pdfSrc = 'http://localhost:8000/pdfs/az-204.pdf';
 
   constructor(private quizService: QuizService) {
     addIcons({ languageOutline, closeOutline });
@@ -104,30 +105,15 @@ export class HomePage {
     this.translating = true;
     this.translatedText = '';
 
-    // 1. Extract text from current page
-    this.quizService.extractPageText(this.currentPage).subscribe({
+    // Use the new image-based translation endpoint
+    this.quizService.translatePageImage(this.currentPage).subscribe({
       next: (res) => {
-        if (res.text) {
-          // 2. Translate text
-          this.quizService.translateText(res.text).subscribe({
-            next: (transRes) => {
-              this.translatedText = transRes.translation;
-              this.translating = false;
-            },
-            error: (err) => {
-              console.error('Translation error', err);
-              this.translatedText = 'Error al traducir el texto.';
-              this.translating = false;
-            }
-          });
-        } else {
-          this.translatedText = 'No se encontró texto en esta página.';
-          this.translating = false;
-        }
+        this.translatedText = res.translation;
+        this.translating = false;
       },
       error: (err) => {
-        console.error('Extraction error', err);
-        this.translatedText = 'Error al extraer el texto de la página.';
+        console.error('Translation error', err);
+        this.translatedText = 'Error al traducir la página. ' + (err.error?.detail || err.message);
         this.translating = false;
       }
     });
