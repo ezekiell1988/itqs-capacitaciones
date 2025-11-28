@@ -286,13 +286,20 @@ async def translate_question(request: QuestionTranslationRequest):
 
                 # Buscar página de inicio
                 # Empezamos buscando desde la pista (hint) para eficiencia, si no, desde el principio
-                search_order = list(
-                    range(max(0, request.start_page_hint - 1), len(pdf.pages))
-                )
-                if request.start_page_hint > 1:
-                    search_order = search_order + list(
-                        range(0, request.start_page_hint - 1)
-                    )
+                # Lógica basada en analyze_pages: saltar las primeras 17 páginas (índice)
+                INDEX_PAGES_SKIP = 17
+                total_pages = len(pdf.pages)
+                
+                start_search_idx = max(INDEX_PAGES_SKIP, request.start_page_hint - 1)
+                
+                # Primero buscamos desde el hint (o 17) hasta el final
+                search_order = list(range(start_search_idx, total_pages))
+                
+                # Si el hint estaba más adelante, buscamos en el hueco entre 17 y el hint
+                if start_search_idx > INDEX_PAGES_SKIP:
+                    search_order += list(range(INDEX_PAGES_SKIP, start_search_idx))
+                
+                # NOTA: No buscamos en 0..16 porque son el índice y dan falsos positivos
 
                 for i in search_order:
                     text = pdf.pages[i].extract_text() or ""
