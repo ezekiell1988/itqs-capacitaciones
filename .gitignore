@@ -29,3 +29,6 @@ desktop.ini
 
 # Tests
 test/
+
+# Data folder
+app/data/
