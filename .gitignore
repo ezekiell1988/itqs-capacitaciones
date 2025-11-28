@@ -1,0 +1,28 @@
+# Carpetas con PDFs originales y archivos procesados
+/docs
+/extracted
+
+# Entorno virtual Python
+/.venv/
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Archivos generados
+*.docx
+
+# Dependencias Node
+node_modules/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Variables de entorno
+.env
+
+# Sistema operativo
+.DS_Store
+Thumbs.db
+desktop.ini
