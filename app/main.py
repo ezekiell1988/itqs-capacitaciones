@@ -644,7 +644,8 @@ async def analyze_pages(
                         page_texts[page_idx] = ""
                 return page_texts[page_idx]
 
-            scan_idx = 0
+            # Las primeras 17 páginas son el menú, comenzamos desde la 18 (índice 17)
+            scan_idx = 17
 
             for q_num in range(start_question, end_question + 1):
                 q_pattern = f"Question #{q_num}"
