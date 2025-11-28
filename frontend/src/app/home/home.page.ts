@@ -1,12 +1,12 @@
 import { Component, HostListener, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { IonContent, IonFab, IonFabButton, IonIcon, IonModal, IonHeader, IonToolbar, IonTitle, IonButtons, IonButton, IonSpinner, IonItem, IonLabel, IonInput } from '@ionic/angular/standalone';
+import { IonContent, IonFab, IonFabButton, IonIcon, IonModal, IonHeader, IonToolbar, IonTitle, IonButtons, IonButton, IonSpinner, IonItem, IonLabel, IonInput, IonTextarea, IonToast } from '@ionic/angular/standalone';
 import { HeaderComponent } from '../components/header/header.component';
 import { NgxExtendedPdfViewerModule } from 'ngx-extended-pdf-viewer';
 import { MarkdownModule } from 'ngx-markdown';
 import { addIcons } from 'ionicons';
-import { languageOutline, closeOutline, searchOutline } from 'ionicons/icons';
+import { languageOutline, closeOutline, searchOutline, saveOutline, createOutline, eyeOutline } from 'ionicons/icons';
 import { QuizService } from '../services/quiz.service';
 
 @Component({
@@ -96,11 +96,35 @@ import { QuizService } from '../services/quiz.service';
             <p>Analizando imágenes y traduciendo pregunta #{{ questionNumber }}...</p>
           </div>
         } @else if (translatedText) {
-          <div class="translation-result markdown-body">
-            <markdown [data]="translatedText"></markdown>
+          <div class="result-container">
+            <div class="toolbar-actions">
+              <ion-button fill="clear" size="small" (click)="isEditing = !isEditing">
+                <ion-icon [name]="isEditing ? 'eye-outline' : 'create-outline'" slot="start"></ion-icon>
+                {{ isEditing ? 'Ver Vista Previa' : 'Editar Markdown' }}
+              </ion-button>
+              <ion-button fill="clear" size="small" color="success" (click)="saveQuestion()" [disabled]="saving">
+                <ion-icon name="save-outline" slot="start"></ion-icon>
+                {{ saving ? 'Guardando...' : 'Guardar' }}
+              </ion-button>
+            </div>
+
+            <div *ngIf="isEditing" class="editor-container">
+              <ion-textarea
+                [(ngModel)]="translatedText"
+                [autoGrow]="true"
+                rows="15"
+                class="markdown-editor">
+              </ion-textarea>
+            </div>
+
+            <div *ngIf="!isEditing" class="translation-result markdown-body">
+              <markdown [data]="translatedText"></markdown>
+            </div>
           </div>
         }
       </ng-template>
+
+      <ion-toast [isOpen]="!!toastMessage" [message]="toastMessage" [duration]="3000" (didDismiss)="toastMessage = ''"></ion-toast>
     </ion-content>
   `,
   styles: [`
@@ -198,7 +222,7 @@ import { QuizService } from '../services/quiz.service';
   imports: [
     CommonModule,
     FormsModule,
-    IonContent, IonFab, IonFabButton, IonIcon, IonModal, IonHeader, IonToolbar, IonTitle, IonButtons, IonButton, IonSpinner, IonItem, IonLabel, IonInput,
+    IonContent, IonFab, IonFabButton, IonIcon, IonModal, IonHeader, IonToolbar, IonTitle, IonButtons, IonButton, IonSpinner, IonItem, IonLabel, IonInput, IonTextarea, IonToast,
     HeaderComponent,
     NgxExtendedPdfViewerModule,
     MarkdownModule
@@ -208,15 +232,18 @@ export class HomePage implements OnInit {
   currentPage = 1;
   showTranslation = false;
   translating = false;
+  saving = false;
   translatedText = '';
   questionNumber = '';
   startPage: number | undefined;
   endPage: number | undefined;
   pdfSrc = 'http://localhost:8000/pdfs/az-204.pdf';
   isDesktop = false;
+  isEditing = false;
+  toastMessage = '';
 
   constructor(private quizService: QuizService) {
-    addIcons({ languageOutline, closeOutline, searchOutline });
+    addIcons({ languageOutline, closeOutline, searchOutline, saveOutline, createOutline, eyeOutline });
   }
 
   ngOnInit() {
@@ -234,13 +261,10 @@ export class HomePage implements OnInit {
 
   onPageChange(page: number) {
     this.currentPage = page;
-    // Optional: Auto-update start/end page if user hasn't manually typed?
-    // Better to leave it manual to avoid confusion.
   }
 
   openTranslationModal() {
     this.showTranslation = true;
-    // Pre-fill with current page as a suggestion
     if (!this.startPage) this.startPage = this.currentPage;
     if (!this.endPage) this.endPage = this.currentPage;
   }
@@ -250,19 +274,55 @@ export class HomePage implements OnInit {
 
     this.translating = true;
     this.translatedText = '';
+    this.isEditing = false;
 
-    // Ensure questionNumber is a string
     const qNum = String(this.questionNumber);
 
     this.quizService.translateQuestion(qNum, this.currentPage, 'az-204.pdf', this.startPage, this.endPage).subscribe({
       next: (res) => {
-        this.translatedText = res.translation;
+        // Convert JSON to Markdown
+        this.translatedText = this.jsonToMarkdown(res.data, res.pages_processed);
         this.translating = false;
       },
       error: (err) => {
         console.error('Translation error', err);
         this.translatedText = 'Error: ' + (err.error?.detail || 'No se pudo traducir la pregunta. Verifica que el número sea correcto.');
         this.translating = false;
+      }
+    });
+  }
+
+  jsonToMarkdown(data: any, pages: string): string {
+    let md = `## Pregunta ${data.id_question} (Páginas ${pages})\n\n`;
+    md += `**Contexto**\n\n${data.question_context}\n\n`;
+
+    md += `**Opciones**\n\n`;
+    if (Array.isArray(data.options)) {
+      data.options.forEach((opt: any) => {
+        md += `- **${opt.letter})** ${opt.text}\n`;
+      });
+    }
+    md += `\n`;
+
+    md += `**Respuesta Correcta**\n\n${data.correct_answer}\n\n`;
+    md += `**Explicación**\n\n${data.explanation}`;
+
+    return md;
+  }
+
+  saveQuestion() {
+    if (!this.questionNumber || !this.translatedText) return;
+
+    this.saving = true;
+    this.quizService.saveQuestion(Number(this.questionNumber), this.translatedText).subscribe({
+      next: (res) => {
+        this.saving = false;
+        this.toastMessage = 'Pregunta guardada exitosamente (Markdown y JSON).';
+      },
+      error: (err) => {
+        console.error('Save error', err);
+        this.saving = false;
+        this.toastMessage = 'Error al guardar la pregunta.';
       }
     });
   }

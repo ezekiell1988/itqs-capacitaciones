@@ -170,16 +170,22 @@ async def translate_question(request: QuestionTranslationRequest):
                     end_page_idx = i
 
         # 2. Convertir páginas a imágenes
-        # Prompt refinado para cumplir con los 4 puntos solicitados y manejo de imágenes
+        # Prompt refinado para solicitar JSON
         prompt_text = (
-            f"Translate 'Question #{request.question_number}' to Spanish based on the provided images. "
-            f"The content is from pages {start_page_idx + 1} to {end_page_idx + 1}. "
-            "Output strictly in Markdown format with the following 4 sections:\n\n"
-            f"1. **Pregunta {request.question_number} (Páginas {start_page_idx + 1}-{end_page_idx + 1})**\n"
-            "2. **Contexto**: The full body of the question. If there are diagrams, architecture schemas, or screenshots in the question area, interpret them and describe them in detail in Spanish here.\n"
-            "3. **Opciones**: List the multiple choice options. If the options are images (e.g., different graphs or icons), describe what each image option represents in Spanish.\n"
-            "4. **Respuesta Correcta**: Provide the correct answer and the explanation. If the answer refers to an image or diagram, explain why that specific image is correct based on the visual evidence.\n\n"
-            "Ignore any content belonging to the next question (e.g., 'Question #" + str(int(request.question_number) + 1) + "')."
+            f"Analyze 'Question #{request.question_number}' from the provided images (pages {start_page_idx + 1}-{end_page_idx + 1}). "
+            "Extract the question details and translate them to Spanish. "
+            "Return ONLY a valid JSON object with the following structure:\n"
+            "{\n"
+            f'  "id_question": {request.question_number},\n'
+            '  "question_context": "The full text of the question in Spanish. Describe any diagrams/images here.",\n'
+            '  "options": [\n'
+            '    {"letter": "A", "text": "Option text in Spanish", "is_correct": boolean},\n'
+            '    ...\n'
+            '  ],\n'
+            '  "correct_answer": "The correct option letter and text in Spanish",\n'
+            '  "explanation": "Detailed explanation in Spanish"\n'
+            "}\n"
+            "Do not include markdown formatting (like ```json) around the output. Just the raw JSON string."
         )
 
         content_payload = [
@@ -211,22 +217,97 @@ async def translate_question(request: QuestionTranslationRequest):
             messages=[
                 {
                     "role": "system", 
-                    "content": "You are an expert technical instructor for Azure certification exams. You are capable of analyzing complex network diagrams, code snippets, and UI screenshots within exam questions and explaining them clearly in Spanish."
+                    "content": "You are an expert technical instructor. You extract exam questions from images and return them in structured JSON format translated to Spanish."
                 },
                 {
                     "role": "user",
                     "content": content_payload
                 }
             ],
-            max_completion_tokens=3000
+            max_completion_tokens=3000,
+            response_format={ "type": "json_object" }
         )
         
-        translation = response.choices[0].message.content
-        return {"translation": translation, "pages_processed": f"{start_page_idx+1}-{end_page_idx+1}"}
+        translation_json_str = response.choices[0].message.content
+        try:
+            translation_data = json.loads(translation_json_str)
+        except json.JSONDecodeError:
+            # Fallback if model returns markdown code block
+            if "```json" in translation_json_str:
+                translation_json_str = translation_json_str.split("```json")[1].split("```")[0].strip()
+                translation_data = json.loads(translation_json_str)
+            else:
+                raise ValueError("Could not parse JSON response")
+
+        return {"data": translation_data, "pages_processed": f"{start_page_idx+1}-{end_page_idx+1}"}
 
     except Exception as e:
         print(f"Translation error: {e}")
         raise HTTPException(status_code=500, detail=f"Translation failed: {str(e)}")
+
+class SaveQuestionRequest(BaseModel):
+    question_number: int
+    markdown_content: str
+
+@app.post("/save-question")
+async def save_question(request: SaveQuestionRequest):
+    if not client:
+        raise HTTPException(status_code=503, detail="Azure OpenAI service not configured")
+
+    try:
+        # 1. Save Markdown
+        md_dir = DATA_DIR / "questions_md"
+        md_dir.mkdir(parents=True, exist_ok=True)
+        md_file = md_dir / f"{request.question_number}.md"
+        
+        with open(md_file, "w", encoding="utf-8") as f:
+            f.write(request.markdown_content)
+            
+        # 2. Convert Markdown back to JSON using LLM
+        response = client.chat.completions.create(
+            model=deployment_name,
+            messages=[
+                {
+                    "role": "system", 
+                    "content": "You are a data conversion assistant. Convert the provided Markdown exam question back into a structured JSON object."
+                },
+                {
+                    "role": "user",
+                    "content": f"""
+                    Convert this Markdown content to JSON with the structure:
+                    {{
+                        "id_question": {request.question_number},
+                        "question_context": "...",
+                        "options": [{{"letter": "A", "text": "...", "is_correct": boolean}}],
+                        "correct_answer": "...",
+                        "explanation": "..."
+                    }}
+                    
+                    Markdown Content:
+                    {request.markdown_content}
+                    """
+                }
+            ],
+            max_completion_tokens=2000,
+            response_format={ "type": "json_object" }
+        )
+        
+        json_str = response.choices[0].message.content
+        json_data = json.loads(json_str)
+        
+        # 3. Save JSON
+        json_dir = DATA_DIR / "questions_json"
+        json_dir.mkdir(parents=True, exist_ok=True)
+        json_file = json_dir / f"{request.question_number}.json"
+        
+        with open(json_file, "w", encoding="utf-8") as f:
+            json.dump(json_data, f, indent=2, ensure_ascii=False)
+            
+        return {"status": "success", "message": f"Question {request.question_number} saved successfully"}
+
+    except Exception as e:
+        print(f"Save error: {e}")
+        raise HTTPException(status_code=500, detail=f"Save failed: {str(e)}")
 
 @app.post("/translate-page-image")
 async def translate_page_image(request: PageTextRequest):
