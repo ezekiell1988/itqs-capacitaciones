@@ -46,4 +46,12 @@ export class QuizService {
 
     return this.http.get<Question[]>(`${this.apiUrl}/questions/${examId}`, { params });
   }
+
+  translateText(text: string): Observable<{ translation: string }> {
+    return this.http.post<{ translation: string }>(`${this.apiUrl}/translate`, { text });
+  }
+
+  extractPageText(pageNumber: number, pdfFilename: string = 'az-204.pdf'): Observable<{ text: string }> {
+    return this.http.post<{ text: string }>(`${this.apiUrl}/extract-page-text`, { page_number: pageNumber, pdf_filename: pdfFilename });
+  }
 }

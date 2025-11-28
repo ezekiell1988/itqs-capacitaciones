@@ -37,10 +37,22 @@ def main():
         print(f"Error: Frontend directory not found at {frontend_dir}")
         sys.exit(1)
 
+    # Check for dependency installation argument (S/N)
+    # Default is 'S' (Install) if not provided
+    install_deps = True
+    if len(sys.argv) > 1:
+        arg = sys.argv[1].upper()
+        if arg == 'N':
+            install_deps = False
+            print("Skipping npm dependencies installation (argument 'N' provided).")
+        elif arg == 'S':
+            print("Installing npm dependencies (argument 'S' provided).")
+    
     try:
         # Install dependencies
-        print("Installing npm dependencies...")
-        subprocess.run(["npm", "install"], cwd=frontend_dir, shell=True, check=True)
+        if install_deps:
+            print("Installing npm dependencies...")
+            subprocess.run(["npm", "install"], cwd=frontend_dir, shell=True, check=True)
         
         # Build project
         print("Building Ionic project...")

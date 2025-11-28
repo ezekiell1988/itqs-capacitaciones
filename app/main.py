@@ -4,11 +4,39 @@ from pydantic import BaseModel
 from typing import List, Optional
 import json
 import random
+import os
 from pathlib import Path
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from dotenv import load_dotenv
+from openai import AzureOpenAI
+import mimetypes
+
+# Ensure .mjs files are served with the correct MIME type
+mimetypes.add_type('application/javascript', '.mjs')
+
+# Cargar variables de entorno
+load_dotenv()
 
 app = FastAPI()
+
+# Configurar cliente de Azure OpenAI
+azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
+api_key = os.getenv("AZURE_OPENAI_API_KEY")
+deployment_name = os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME", "gpt-5.1") # Nombre del despliegue en Azure AI Studio
+api_version = os.getenv("AZURE_OPENAI_API_VERSION", "2024-12-01-preview")
+
+client = None
+if azure_endpoint and api_key:
+    try:
+        client = AzureOpenAI(
+            azure_endpoint=azure_endpoint,
+            api_key=api_key,
+            api_version=api_version
+        )
+        print(f"Azure OpenAI Client initialized. Endpoint: {azure_endpoint}, Deployment: {deployment_name}, Version: {api_version}")
+    except Exception as e:
+        print(f"Error initializing Azure OpenAI client: {e}")
 
 # Configurar CORS
 app.add_middleware(
@@ -32,6 +60,59 @@ class Question(BaseModel):
     opciones: List[Option]
     respuesta_correcta: str
     explicacion: Optional[str] = ""
+
+class TranslateRequest(BaseModel):
+    text: str
+
+import pdfplumber
+
+class PageTextRequest(BaseModel):
+    page_number: int
+    pdf_filename: str = "az-204.pdf"
+
+@app.post("/extract-page-text")
+async def extract_page_text(request: PageTextRequest):
+    # Ruta al PDF en assets del frontend
+    pdf_path = Path(__file__).parent.parent / "frontend" / "src" / "assets" / "pdf" / request.pdf_filename
+    
+    if not pdf_path.exists():
+        raise HTTPException(status_code=404, detail=f"PDF file not found: {request.pdf_filename}")
+    
+    try:
+        text = ""
+        with pdfplumber.open(pdf_path) as pdf:
+            # pdfplumber usa índice 0, pero el usuario ve página 1
+            page_idx = request.page_number - 1
+            if 0 <= page_idx < len(pdf.pages):
+                page = pdf.pages[page_idx]
+                text = page.extract_text()
+            else:
+                raise HTTPException(status_code=400, detail="Page number out of range")
+        
+        return {"text": text}
+    except Exception as e:
+        print(f"Error extracting text: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to extract text: {str(e)}")
+
+@app.post("/translate")
+async def translate_text(request: TranslateRequest):
+    if not client:
+        raise HTTPException(status_code=503, detail="Azure OpenAI service not configured")
+    
+    try:
+        response = client.chat.completions.create(
+            model=deployment_name, # Usar la variable de entorno
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant that translates technical text from English to Spanish. Maintain technical terms if appropriate but ensure the translation is natural and accurate."},
+                {"role": "user", "content": f"Translate the following text to Spanish:\n\n{request.text}"}
+            ],
+            max_completion_tokens=2000
+        )
+        translation = response.choices[0].message.content
+        return {"translation": translation}
+    except Exception as e:
+        print(f"Translation error: {e}")
+        raise HTTPException(status_code=500, detail=f"Translation failed: {str(e)}")
 
 @app.get("/health")
 def health_check():

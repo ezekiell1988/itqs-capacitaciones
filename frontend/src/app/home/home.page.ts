@@ -1,55 +1,69 @@
 import { Component } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { IonContent, IonSpinner, IonToast } from '@ionic/angular/standalone';
+import { IonContent, IonFab, IonFabButton, IonIcon, IonModal, IonHeader, IonToolbar, IonTitle, IonButtons, IonButton, IonSpinner } from '@ionic/angular/standalone';
 import { HeaderComponent } from '../components/header/header.component';
-import { QuizSetupComponent, QuizConfig } from './quiz-setup/quiz-setup.component';
-import { QuizGameComponent } from './quiz-game/quiz-game.component';
-import { QuizResultsComponent } from './quiz-results/quiz-results.component';
-import { QuizService, Question } from '../services/quiz.service';
-
-type GameState = 'setup' | 'playing' | 'results';
+import { NgxExtendedPdfViewerModule } from 'ngx-extended-pdf-viewer';
+import { addIcons } from 'ionicons';
+import { languageOutline, closeOutline } from 'ionicons/icons';
+import { QuizService } from '../services/quiz.service';
 
 @Component({
   selector: 'app-home',
   template: `
     <app-header title="ITQS Capacitaciones"></app-header>
 
-    <ion-content class="ion-padding">
-      @if (loading) {
-        <div class="loading-container">
-          <ion-spinner name="crescent"></ion-spinner>
-          <p>Cargando preguntas...</p>
-        </div>
-      }
+    <ion-content [fullscreen]="true">
+      <ngx-extended-pdf-viewer
+        src="assets/pdf/az-204.pdf"
+        [height]="'100%'"
+        [textLayer]="true"
+        [showHandToolButton]="true"
+        (pageChange)="onPageChange($event)">
+      </ngx-extended-pdf-viewer>
 
-      @switch (gameState) {
-        @case ('setup') {
-          <app-quiz-setup (start)="onStartGame($event)"></app-quiz-setup>
-        }
-        @case ('playing') {
-          <app-quiz-game
-            [questions]="questions"
-            (finish)="onFinishGame($event)">
-          </app-quiz-game>
-        }
-        @case ('results') {
-          <app-quiz-results
-            [questions]="questions"
-            (restart)="onRestart()">
-          </app-quiz-results>
-        }
-      }
+      <ion-fab vertical="bottom" horizontal="end" slot="fixed">
+        <ion-fab-button (click)="translateCurrentPage()" [disabled]="translating">
+          <ion-icon name="language-outline"></ion-icon>
+        </ion-fab-button>
+      </ion-fab>
 
-      <ion-toast
-        [isOpen]="!!errorMessage"
-        [message]="errorMessage"
-        [duration]="3000"
-        color="danger"
-        (didDismiss)="errorMessage = ''">
-      </ion-toast>
+      <ion-modal [isOpen]="showTranslation" (didDismiss)="showTranslation = false">
+        <ng-template>
+          <ion-header>
+            <ion-toolbar>
+              <ion-title>Traducción (Página {{ currentPage }})</ion-title>
+              <ion-buttons slot="end">
+                <ion-button (click)="showTranslation = false">
+                  <ion-icon name="close-outline"></ion-icon>
+                </ion-button>
+              </ion-buttons>
+            </ion-toolbar>
+          </ion-header>
+          <ion-content class="ion-padding">
+            @if (translating) {
+              <div class="loading-container">
+                <ion-spinner name="crescent"></ion-spinner>
+                <p>Traduciendo...</p>
+              </div>
+            } @else {
+              <div class="translation-content" [innerHTML]="translatedText"></div>
+            }
+          </ion-content>
+        </ng-template>
+      </ion-modal>
     </ion-content>
   `,
   styles: [`
+    :host {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+    }
+    ngx-extended-pdf-viewer {
+      flex: 1;
+      width: 100%;
+      height: 100%;
+    }
     .loading-container {
       display: flex;
       flex-direction: column;
@@ -57,53 +71,65 @@ type GameState = 'setup' | 'playing' | 'results';
       justify-content: center;
       height: 100%;
     }
+    .translation-content {
+      white-space: pre-wrap;
+      font-family: sans-serif;
+      line-height: 1.5;
+    }
   `],
   standalone: true,
   imports: [
     CommonModule,
-    IonContent, IonSpinner, IonToast,
+    IonContent, IonFab, IonFabButton, IonIcon, IonModal, IonHeader, IonToolbar, IonTitle, IonButtons, IonButton, IonSpinner,
     HeaderComponent,
-    QuizSetupComponent,
-    QuizGameComponent,
-    QuizResultsComponent
+    NgxExtendedPdfViewerModule
   ]
 })
 export class HomePage {
-  gameState: GameState = 'setup';
-  questions: Question[] = [];
-  loading = false;
-  errorMessage = '';
+  currentPage = 1;
+  showTranslation = false;
+  translating = false;
+  translatedText = '';
 
-  constructor(private quizService: QuizService) {}
+  constructor(private quizService: QuizService) {
+    addIcons({ languageOutline, closeOutline });
+  }
 
-  onStartGame(config: QuizConfig) {
-    this.loading = true;
-    this.quizService.getQuestions(config.examId, config.lang, config.limit, config.randomize)
-      .subscribe({
-        next: (data) => {
-          this.questions = data;
-          this.loading = false;
-          if (this.questions.length > 0) {
-            this.gameState = 'playing';
-          } else {
-            this.errorMessage = 'No se encontraron preguntas para esta configuración.';
-          }
-        },
-        error: (err) => {
-          console.error(err);
-          this.loading = false;
-          this.errorMessage = 'Error al cargar las preguntas. Asegúrate de que el servidor backend esté corriendo.';
+  onPageChange(page: number) {
+    this.currentPage = page;
+  }
+
+  translateCurrentPage() {
+    this.showTranslation = true;
+    this.translating = true;
+    this.translatedText = '';
+
+    // 1. Extract text from current page
+    this.quizService.extractPageText(this.currentPage).subscribe({
+      next: (res) => {
+        if (res.text) {
+          // 2. Translate text
+          this.quizService.translateText(res.text).subscribe({
+            next: (transRes) => {
+              this.translatedText = transRes.translation;
+              this.translating = false;
+            },
+            error: (err) => {
+              console.error('Translation error', err);
+              this.translatedText = 'Error al traducir el texto.';
+              this.translating = false;
+            }
+          });
+        } else {
+          this.translatedText = 'No se encontró texto en esta página.';
+          this.translating = false;
         }
-      });
-  }
-
-  onFinishGame(questionsWithAnswers: Question[]) {
-    this.questions = questionsWithAnswers;
-    this.gameState = 'results';
-  }
-
-  onRestart() {
-    this.questions = [];
-    this.gameState = 'setup';
+      },
+      error: (err) => {
+        console.error('Extraction error', err);
+        this.translatedText = 'Error al extraer el texto de la página.';
+        this.translating = false;
+      }
+    });
   }
 }
