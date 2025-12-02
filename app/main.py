@@ -217,6 +217,24 @@ async def translate_question(request: QuestionTranslationRequest):
             saved_md_es_full = ""
             saved_md_en = ""
             saved_md_en_full = ""
+            pages_from_json = "Unknown"
+
+            # Try to extract pages from JSON
+            if json_es_path.exists():
+                with open(json_es_path, "r", encoding="utf-8") as f:
+                    json_data = json.load(f)
+                    start_page = json_data.get("start_page")
+                    end_page = json_data.get("end_page")
+                    if start_page and end_page:
+                        pages_from_json = f"{start_page}-{end_page}"
+                    else:
+                        # Fallback para archivos antiguos con el campo 'pages'
+                        pages_from_json = json_data.get("pages", "Unknown")
+                    end_page = json_data.get("end_page")
+                    if start_page and end_page:
+                        pages_from_json = f"{start_page}-{end_page}"
+                    else:
+                        pages_from_json = json_data.get("pages", "Unknown")
 
             if md_es_path.exists():
                 with open(md_es_path, "r", encoding="utf-8") as f:
@@ -236,7 +254,7 @@ async def translate_question(request: QuestionTranslationRequest):
                 "markdown_full": saved_md_es_full,
                 "markdown_en": saved_md_en,
                 "markdown_full_en": saved_md_en_full,
-                "pages_processed": "Saved File",
+                "pages_processed": pages_from_json,
                 "saved": True,
             }
         except Exception as e:
@@ -315,16 +333,33 @@ async def translate_question(request: QuestionTranslationRequest):
 
                 # Buscar página final (donde empieza la siguiente pregunta o un límite razonable)
                 end_page_idx = start_page_idx
-                # Buscamos hasta 3 páginas adelante máximo
-                for i in range(start_page_idx, min(start_page_idx + 4, len(pdf.pages))):
+                # Para casos de estudio, necesitamos buscar más páginas adelante (hasta 10)
+                # Buscamos hasta encontrar la siguiente pregunta o hasta 10 páginas adelante
+                max_search_pages = 10
+                found_next = False
+                
+                for i in range(start_page_idx + 1, min(start_page_idx + max_search_pages + 1, len(pdf.pages))):
                     text = pdf.pages[i].extract_text() or ""
-                    if i > start_page_idx and next_q_pattern in text:
-                        # Si encontramos la siguiente pregunta, la página anterior es el fin seguro,
-                        # o esta página si la pregunta nueva empieza muy abajo.
-                        # Por seguridad, incluimos esta página para contexto.
-                        end_page_idx = i
+                    if next_q_pattern in text:
+                        # Encontramos la siguiente pregunta
+                        # La pregunta actual termina en la página anterior
+                        end_page_idx = i - 1
+                        found_next = True
                         break
-                    end_page_idx = i
+                
+                # Si no encontramos la siguiente pregunta, buscamos la página con opciones
+                if not found_next:
+                    # Buscamos hacia atrás desde la última página buscada para encontrar donde están las opciones
+                    for i in range(min(start_page_idx + max_search_pages, len(pdf.pages) - 1), start_page_idx, -1):
+                        text = pdf.pages[i].extract_text() or ""
+                        # Si la página tiene opciones múltiples (A, B, C, D) y "Correct Answer" o "Explanation"
+                        if ("A)" in text and "B)" in text and "C)" in text) or "Correct Answer" in text or "Explanation" in text:
+                            end_page_idx = i
+                            break
+                    
+                    # Si no encontramos opciones, asumimos 7 páginas (típico para casos de estudio)
+                    if end_page_idx == start_page_idx:
+                        end_page_idx = min(start_page_idx + 7, len(pdf.pages) - 1)
 
         # 2. Convertir páginas a imágenes
         # Prompt refinado para solicitar JSON
@@ -340,6 +375,8 @@ async def translate_question(request: QuestionTranslationRequest):
             "{\n"
             '  "en": {\n'
             f'    "id_question": {request.question_number},\n'
+            f'    "start_page": {start_page_idx + 1},\n'
+            f'    "end_page": {end_page_idx + 1},\n'
             '    "short_question": "Summary of the question",\n'
             '    "question_context": "Full question text",\n'
             '    "image_explanation": "Detailed description of any images/diagrams (if present, else null)",\n'
@@ -352,6 +389,8 @@ async def translate_question(request: QuestionTranslationRequest):
             "  },\n"
             '  "es": {\n'
             f'    "id_question": {request.question_number},\n'
+            f'    "start_page": {start_page_idx + 1},\n'
+            f'    "end_page": {end_page_idx + 1},\n'
             '    "short_question": "Resumen de la pregunta en español (mantener términos técnicos en inglés)",\n'
             '    "question_context": "Texto completo de la pregunta en español. Incluye aquí la descripción de diagramas/imágenes si las hay. (mantener términos técnicos en inglés)",\n'
             '    "community_discussion": "Resumen de la discusión de la comunidad en español si existe, sino null",\n'
@@ -384,20 +423,52 @@ async def translate_question(request: QuestionTranslationRequest):
                 )
 
         # 3. Enviar a Azure OpenAI
-        response = client.chat.completions.create(
-            model=deployment_name,
-            messages=[
-                {
-                    "role": "system",
-                    "content": "You are an expert technical instructor. You extract exam questions from images and return them in structured JSON format translated to Spanish. IMPORTANT: Keep technical terms in English.",
-                },
-                {"role": "user", "content": content_payload},
-            ],
-            max_completion_tokens=4000,
-            response_format={"type": "json_object"},
-        )
-
-        translation_json_str = response.choices[0].message.content
+        translation_json_str = None
+        try:
+            response = client.chat.completions.create(
+                model=deployment_name,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are an expert technical instructor. You extract exam questions from images and return them in structured JSON format translated to Spanish. IMPORTANT: Keep technical terms in English.",
+                    },
+                    {"role": "user", "content": content_payload},
+                ],
+                max_completion_tokens=8000,
+                response_format={"type": "json_object"},
+            )
+            translation_json_str = response.choices[0].message.content
+        except Exception as e:
+            # If json_object format fails, retry without strict format
+            print(f"⚠️ First attempt with json_object format failed: {e}")
+            print("Retrying without strict JSON format...")
+            
+            response = client.chat.completions.create(
+                model=deployment_name,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are an expert technical instructor. You extract exam questions from images and return them in structured JSON format translated to Spanish. IMPORTANT: Keep technical terms in English. Return ONLY valid JSON, no markdown formatting.",
+                    },
+                    {"role": "user", "content": content_payload},
+                ],
+                max_completion_tokens=8000,
+            )
+            translation_json_str = response.choices[0].message.content
+        
+        # Debug: Log response length and first 500 chars
+        print(f"Response length: {len(translation_json_str) if translation_json_str else 0}")
+        print(f"Finish reason: {response.choices[0].finish_reason}")
+        
+        if translation_json_str:
+            print(f"Response preview: {translation_json_str[:500]}")
+        else:
+            print("⚠️ Empty response from Azure OpenAI")
+            print(f"Response object: {response}")
+            if hasattr(response.choices[0], 'content_filter_results'):
+                print(f"Content filter results: {response.choices[0].content_filter_results}")
+            raise ValueError("Empty response from Azure OpenAI - check content filters or token limits")
+        
         try:
             full_data = json.loads(translation_json_str)
             data_en = full_data.get("en")
@@ -406,7 +477,10 @@ async def translate_question(request: QuestionTranslationRequest):
             if not data_en or not data_es:
                 raise ValueError("Missing 'en' or 'es' keys in response")
 
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as e:
+            print(f"JSON decode error: {str(e)}")
+            print(f"Full response: {translation_json_str[:2000]}")
+            
             # Fallback if model returns markdown code block
             if "```json" in translation_json_str:
                 translation_json_str = (
@@ -416,7 +490,7 @@ async def translate_question(request: QuestionTranslationRequest):
                 data_en = full_data.get("en")
                 data_es = full_data.get("es")
             else:
-                raise ValueError("Could not parse JSON response")
+                raise ValueError(f"Could not parse JSON response: {str(e)}")
 
         # 4. Generate Markdown (from Spanish and English data)
         pages_str = f"{start_page_idx+1}-{end_page_idx+1}"
@@ -571,6 +645,45 @@ def get_questions(
     limit: int = 10,
     randomize: bool = False,
 ):
+    # Try to load from individual JSON files first
+    json_dir = DATA_DIR / exam_id / "questions_json" / lang
+    
+    if json_dir.exists():
+        questions_data = []
+        json_files = sorted(json_dir.glob("*.json"), key=lambda x: int(x.stem.split('_')[0]) if x.stem.split('_')[0].isdigit() else 0)
+        
+        for json_file in json_files:
+            try:
+                with open(json_file, "r", encoding="utf-8") as f:
+                    q_data = json.load(f)
+                    # Normalize to Spanish keys structure
+                    normalized_q = {
+                        "numero": str(q_data.get("id_question", "")),
+                        "pregunta": q_data.get("short_question", ""),
+                        "opciones": [
+                            {
+                                "letra": opt.get("letter", ""),
+                                "texto": opt.get("text", ""),
+                                "es_correcta": opt.get("is_correct", False),
+                            }
+                            for opt in q_data.get("options", [])
+                        ],
+                        "respuesta_correcta": q_data.get("correct_answer", ""),
+                        "explicacion": q_data.get("explanation", ""),
+                    }
+                    questions_data.append(normalized_q)
+            except Exception as e:
+                print(f"Error reading {json_file}: {e}")
+                continue
+        
+        if questions_data:
+            if randomize:
+                random.shuffle(questions_data)
+            if limit > 0:
+                questions_data = questions_data[:limit]
+            return questions_data
+    
+    # Fallback to old format
     filename = (
         f"{exam_id}_questions_{lang}.json"
         if lang == "es"
@@ -579,11 +692,6 @@ def get_questions(
     file_path = DATA_DIR / filename
 
     if not file_path.exists():
-        # Fallback logic or error if file doesn't exist
-        # Try to map English structure to Spanish structure if needed,
-        # but for now assuming files exist as generated previously.
-        # Note: The English JSONs have keys: number, question, options (letter, text, is_correct), correct_answer, explanation
-        # The Spanish JSONs have keys: numero, pregunta, opciones (letra, texto, es_correcta), respuesta_correcta, explicacion
         raise HTTPException(
             status_code=404, detail=f"Questions file not found: {filename}"
         )

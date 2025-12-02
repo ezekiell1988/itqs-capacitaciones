@@ -6,13 +6,18 @@ import { HeaderComponent } from '../components/header/header.component';
 import { NgxExtendedPdfViewerModule } from 'ngx-extended-pdf-viewer';
 import { MarkdownModule } from 'ngx-markdown';
 import { addIcons } from 'ionicons';
-import { languageOutline, closeOutline, searchOutline, saveOutline, createOutline, eyeOutline } from 'ionicons/icons';
+import { languageOutline, closeOutline, searchOutline, saveOutline, createOutline, eyeOutline, documentTextOutline } from 'ionicons/icons';
 import { ExamService } from '../services/exam.service';
+import { Router } from '@angular/router';
 
 @Component({
   selector: 'app-home',
   template: `
-    <app-header title="ITQS Capacitaciones"></app-header>
+    <app-header title="ITQS Capacitaciones">
+      <ion-button fill="clear" (click)="goToReport()">
+        <ion-icon name="document-text-outline" slot="icon-only"></ion-icon>
+      </ion-button>
+    </app-header>
 
     <ion-content [fullscreen]="true">
       <!-- Segment for Mobile -->
@@ -295,8 +300,8 @@ export class HomePage implements OnInit {
   isDesktop = false;
   toastMessage = '';
 
-  constructor(private examService: ExamService) {
-    addIcons({ languageOutline, closeOutline, searchOutline, saveOutline, createOutline, eyeOutline });
+  constructor(private examService: ExamService, private router: Router) {
+    addIcons({ languageOutline, closeOutline, searchOutline, saveOutline, createOutline, eyeOutline, documentTextOutline });
   }
 
   ngOnInit() {
@@ -360,5 +365,9 @@ export class HomePage implements OnInit {
       case 'en_full': return this.markdownEnFull;
       default: return this.markdownEs;
     }
+  }
+
+  goToReport() {
+    this.router.navigate(['/report']);
   }
 }
